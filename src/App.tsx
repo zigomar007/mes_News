@@ -51,8 +51,15 @@ const feedConfigs: FeedConfig[] = [
 const RSS_PROXIES = [
   'https://api.rss2json.com/v1/api.json',
   'https://api.allorigins.win/get?url=',
-  'https://cors-anywhere.herokuapp.com/'
+  'https://cors-anywhere.herokuapp.com/',
+  'https://corsproxy.io/?',
+  'https://api.codetabs.com/v1/proxy?quest='
 ];
+
+// Check if running locally
+const isLocalhost = window.location.hostname === 'localhost' || 
+                   window.location.hostname === '127.0.0.1' || 
+                   window.location.protocol === 'file:';
 
 const App: React.FC = () => {
   const [feeds, setFeeds] = useState<Record<string, RSSFeed>>({});
@@ -60,6 +67,7 @@ const App: React.FC = () => {
   const [error, setError] = useState<Record<string, string>>({});
   const [selectedFeed, setSelectedFeed] = useState<string>('all');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [localWarning, setLocalWarning] = useState(isLocalhost);
 
   const extractImageFromContent = (content: string): string | null => {
     if (!content) return null;
@@ -117,10 +125,18 @@ const App: React.FC = () => {
 
   const fetchWithRSS2JSON = async (config: FeedConfig) => {
     try {
-      const response = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(config.url)}&count=20&api_key=YOUR_API_KEY`);
+      // Use different proxy for localhost
+      const proxyUrl = isLocalhost 
+        ? `https://api.allorigins.win/get?url=${encodeURIComponent(config.url)}`
+        : `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(config.url)}&count=20`;
+      
+      const response = await fetch(proxyUrl);
       const data = await response.json();
       
-      if (data.status === 'ok') {
+      if (isLocalhost && data.contents) {
+        // Parse XML manually for localhost
+        return await parseXMLContent(data.contents, config);
+      } else if (data.status === 'ok') {
         return {
           title: data.feed.title || config.name,
           description: data.feed.description || '',
@@ -144,6 +160,51 @@ const App: React.FC = () => {
       throw new Error(data.message || 'Failed to fetch RSS');
     } catch (error) {
       console.error('RSS2JSON failed:', error);
+      throw error;
+    }
+  };
+
+  const parseXMLContent = async (xmlContent: string, config: FeedConfig) => {
+    try {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlContent, 'text/xml');
+      const items = xmlDoc.querySelectorAll('item');
+      
+      const feedItems: RSSItem[] = Array.from(items).slice(0, 20).map(item => {
+        const title = item.querySelector('title')?.textContent || 'بدون عنوان';
+        const link = item.querySelector('link')?.textContent || '#';
+        const pubDate = item.querySelector('pubDate')?.textContent || new Date().toISOString();
+        const author = item.querySelector('author')?.textContent || 
+                      item.querySelector('dc\\:creator')?.textContent || 
+                      'غير محدد';
+        const description = item.querySelector('description')?.textContent || '';
+        const content = item.querySelector('content\\:encoded')?.textContent || description;
+        const enclosure = item.querySelector('enclosure[type^="image"]');
+        const enclosureUrl = enclosure?.getAttribute('url') || null;
+        
+        return {
+          title,
+          link,
+          pubDate,
+          author,
+          description,
+          content,
+          categories: [],
+          thumbnail: enclosureUrl ||
+                    extractImageFromContent(content) ||
+                    extractImageFromContent(description) ||
+                    null
+        };
+      });
+
+      return {
+        title: xmlDoc.querySelector('channel > title')?.textContent || config.name,
+        description: xmlDoc.querySelector('channel > description')?.textContent || '',
+        link: xmlDoc.querySelector('channel > link')?.textContent || '',
+        items: feedItems
+      };
+    } catch (error) {
+      console.error('XML parsing failed:', error);
       throw error;
     }
   };
@@ -203,14 +264,19 @@ const App: React.FC = () => {
   const fetchRSSFeed = async (config: FeedConfig) => {
     setLoading(prev => ({ ...prev, [config.id]: true }));
     setError(prev => ({ ...prev, [config.id]: '' }));
+    
+    // Hide local warning once feeds start loading
+    if (localWarning) {
+      setLocalWarning(false);
+    }
 
     try {
-      // Try RSS2JSON first
+      // Try different approaches based on environment
       let feedData;
       try {
         feedData = await fetchWithRSS2JSON(config);
       } catch (error) {
-        console.log('RSS2JSON failed, trying AllOrigins...');
+        console.log('Primary method failed, trying AllOrigins...');
         feedData = await fetchWithAllOrigins(config);
       }
 
@@ -319,6 +385,22 @@ const App: React.FC = () => {
       <header className="bg-white shadow-lg sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
+            {localWarning && (
+              <div className="fixed top-20 left-4 right-4 bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded z-50">
+                <div className="flex items-center">
+                  <AlertCircle className="h-5 w-5 ml-2" />
+                  <span className="text-sm">
+                    <strong>تشغيل محلي:</strong> قد تواجه مشاكل CORS. للحصول على أفضل تجربة، استخدم خادم ويب أو انشر الموقع.
+                  </span>
+                  <button 
+                    onClick={() => setLocalWarning(false)}
+                    className="mr-4 text-yellow-700 hover:text-yellow-900"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="flex items-center space-x-4 space-x-reverse">
               <img 
                 src="https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=40&h=40&fit=crop&crop=face" 
@@ -494,7 +576,10 @@ const App: React.FC = () => {
             {Object.values(loading).some(Boolean) && filteredItems.length === 0 && (
               <div className="text-center py-12">
                 <RefreshCw className="h-12 w-12 text-blue-600 mx-auto mb-4 animate-spin" />
-                <p className="text-gray-500 text-lg">جاري تحميل الأخبار...</p>
+                <p className="text-gray-500 text-lg">
+                  جاري تحميل الأخبار...
+                  {isLocalhost && <span className="block text-sm mt-2">(قد يستغرق وقتاً أطول في التشغيل المحلي)</span>}
+                </p>
               </div>
             )}
           </div>
