@@ -64,15 +64,53 @@ const App: React.FC = () => {
   const extractImageFromContent = (content: string): string | null => {
     if (!content) return null;
     
-    // Try to extract image from HTML content
-    const imgRegex = /<img[^>]+src="([^">]+)"/i;
-    const match = content.match(imgRegex);
-    if (match) return match[1];
+    // Multiple strategies to extract images from content
     
-    // Try to extract from media:content or enclosure
-    const mediaRegex = /<media:content[^>]+url="([^">]+)"/i;
-    const mediaMatch = content.match(mediaRegex);
-    if (mediaMatch) return mediaMatch[1];
+    // 1. Try to extract from img tags with various formats
+    const imgPatterns = [
+      /<img[^>]+src=["']([^"']+)["'][^>]*>/gi,
+      /<img[^>]+src=([^\s>]+)[^>]*>/gi,
+      /src=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi,
+      /src=([^\s"']+\.(?:jpg|jpeg|png|gif|webp))/gi
+    ];
+    
+    for (const pattern of imgPatterns) {
+      const matches = content.matchAll(pattern);
+      for (const match of matches) {
+        const imageUrl = match[1];
+        if (imageUrl && !imageUrl.includes('logo') && !imageUrl.includes('icon') && imageUrl.length > 10) {
+          // Clean up the URL
+          const cleanUrl = imageUrl.replace(/&amp;/g, '&').trim();
+          if (cleanUrl.startsWith('http') || cleanUrl.startsWith('//')) {
+            return cleanUrl.startsWith('//') ? 'https:' + cleanUrl : cleanUrl;
+          }
+        }
+      }
+    }
+    
+    // 2. Try to extract from media:content or media:thumbnail
+    const mediaPatterns = [
+      /<media:content[^>]+url=["']([^"']+)["'][^>]*>/gi,
+      /<media:thumbnail[^>]+url=["']([^"']+)["'][^>]*>/gi,
+      /<enclosure[^>]+url=["']([^"']+)["'][^>]*type=["']image[^"']*["'][^>]*>/gi
+    ];
+    
+    for (const pattern of mediaPatterns) {
+      const match = content.match(pattern);
+      if (match) return match[1];
+    }
+    
+    // 3. Look for any URL that looks like an image
+    const urlPattern = /https?:\/\/[^\s<>"']+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^\s<>"']*)?/gi;
+    const urlMatches = content.match(urlPattern);
+    if (urlMatches && urlMatches.length > 0) {
+      // Filter out logos and small images
+      for (const url of urlMatches) {
+        if (!url.includes('logo') && !url.includes('icon') && !url.includes('avatar')) {
+          return url;
+        }
+      }
+    }
     
     return null;
   };
@@ -95,9 +133,11 @@ const App: React.FC = () => {
             description: item.description || item.content || '',
             content: item.content || item.description || '',
             categories: item.categories || [],
-            thumbnail: extractImageFromContent(item.content || item.description || '') || 
-                      item.thumbnail || 
-                      'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop'
+            thumbnail: item.thumbnail || 
+                      item.enclosure?.url ||
+                      extractImageFromContent(item.content || item.description || '') ||
+                      extractImageFromContent(item.title || '') ||
+                      null
           }))
         };
       }
@@ -128,6 +168,8 @@ const App: React.FC = () => {
                         'غير محدد';
           const description = item.querySelector('description')?.textContent || '';
           const content = item.querySelector('content\\:encoded')?.textContent || description;
+          const enclosure = item.querySelector('enclosure[type^="image"]');
+          const enclosureUrl = enclosure?.getAttribute('url') || null;
           
           return {
             title,
@@ -137,8 +179,10 @@ const App: React.FC = () => {
             description,
             content,
             categories: [],
-            thumbnail: extractImageFromContent(content) || 
-                      'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop'
+            thumbnail: enclosureUrl ||
+                      extractImageFromContent(content) ||
+                      extractImageFromContent(description) ||
+                      null
           };
         });
 
@@ -382,12 +426,14 @@ const App: React.FC = () => {
                   <div className="lg:flex">
                     <div className="lg:w-1/3">
                       <img
-                        src={item.thumbnail}
+                        src={item.thumbnail || 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop'}
                         alt={item.title}
                         className="w-full h-48 lg:h-full object-cover"
                         onError={(e) => {
                           const target = e.target as HTMLImageElement;
-                          target.src = 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop';
+                          if (!target.src.includes('unsplash')) {
+                            target.src = 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop';
+                          }
                         }}
                       />
                     </div>
