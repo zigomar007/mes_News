@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { RefreshCw, Calendar, User, ExternalLink, Menu, X } from 'lucide-react';
+import { RefreshCw, Calendar, User, ExternalLink, Menu, X, AlertCircle } from 'lucide-react';
 
 interface RSSItem {
   title: string;
@@ -9,10 +9,6 @@ interface RSSItem {
   description: string;
   content?: string;
   categories?: string[];
-  enclosure?: {
-    link: string;
-    type: string;
-  };
   thumbnail?: string;
 }
 
@@ -51,6 +47,13 @@ const feedConfigs: FeedConfig[] = [
   }
 ];
 
+// Alternative RSS proxy services
+const RSS_PROXIES = [
+  'https://api.rss2json.com/v1/api.json',
+  'https://api.allorigins.win/get?url=',
+  'https://cors-anywhere.herokuapp.com/'
+];
+
 const App: React.FC = () => {
   const [feeds, setFeeds] = useState<Record<string, RSSFeed>>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
@@ -58,68 +61,143 @@ const App: React.FC = () => {
   const [selectedFeed, setSelectedFeed] = useState<string>('all');
   const [menuOpen, setMenuOpen] = useState(false);
 
+  const extractImageFromContent = (content: string): string | null => {
+    if (!content) return null;
+    
+    // Try to extract image from HTML content
+    const imgRegex = /<img[^>]+src="([^">]+)"/i;
+    const match = content.match(imgRegex);
+    if (match) return match[1];
+    
+    // Try to extract from media:content or enclosure
+    const mediaRegex = /<media:content[^>]+url="([^">]+)"/i;
+    const mediaMatch = content.match(mediaRegex);
+    if (mediaMatch) return mediaMatch[1];
+    
+    return null;
+  };
+
+  const fetchWithRSS2JSON = async (config: FeedConfig) => {
+    try {
+      const response = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(config.url)}&count=20&api_key=YOUR_API_KEY`);
+      const data = await response.json();
+      
+      if (data.status === 'ok') {
+        return {
+          title: data.feed.title || config.name,
+          description: data.feed.description || '',
+          link: data.feed.link || '',
+          items: data.items.map((item: any) => ({
+            title: item.title || 'بدون عنوان',
+            link: item.link || '#',
+            pubDate: item.pubDate || new Date().toISOString(),
+            author: item.author || item.creator || 'غير محدد',
+            description: item.description || item.content || '',
+            content: item.content || item.description || '',
+            categories: item.categories || [],
+            thumbnail: extractImageFromContent(item.content || item.description || '') || 
+                      item.thumbnail || 
+                      'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop'
+          }))
+        };
+      }
+      throw new Error(data.message || 'Failed to fetch RSS');
+    } catch (error) {
+      console.error('RSS2JSON failed:', error);
+      throw error;
+    }
+  };
+
+  const fetchWithAllOrigins = async (config: FeedConfig) => {
+    try {
+      const response = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(config.url)}`);
+      const data = await response.json();
+      
+      if (data.contents) {
+        // Parse XML manually
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(data.contents, 'text/xml');
+        const items = xmlDoc.querySelectorAll('item');
+        
+        const feedItems: RSSItem[] = Array.from(items).slice(0, 20).map(item => {
+          const title = item.querySelector('title')?.textContent || 'بدون عنوان';
+          const link = item.querySelector('link')?.textContent || '#';
+          const pubDate = item.querySelector('pubDate')?.textContent || new Date().toISOString();
+          const author = item.querySelector('author')?.textContent || 
+                        item.querySelector('dc\\:creator')?.textContent || 
+                        'غير محدد';
+          const description = item.querySelector('description')?.textContent || '';
+          const content = item.querySelector('content\\:encoded')?.textContent || description;
+          
+          return {
+            title,
+            link,
+            pubDate,
+            author,
+            description,
+            content,
+            categories: [],
+            thumbnail: extractImageFromContent(content) || 
+                      'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop'
+          };
+        });
+
+        return {
+          title: xmlDoc.querySelector('channel > title')?.textContent || config.name,
+          description: xmlDoc.querySelector('channel > description')?.textContent || '',
+          link: xmlDoc.querySelector('channel > link')?.textContent || '',
+          items: feedItems
+        };
+      }
+      throw new Error('No content received');
+    } catch (error) {
+      console.error('AllOrigins failed:', error);
+      throw error;
+    }
+  };
+
   const fetchRSSFeed = async (config: FeedConfig) => {
     setLoading(prev => ({ ...prev, [config.id]: true }));
     setError(prev => ({ ...prev, [config.id]: '' }));
 
     try {
-      const proxyUrl = 'https://api.rss2json.com/v1/api.json';
-      const response = await fetch(`${proxyUrl}?rss_url=${encodeURIComponent(config.url)}&count=20`);
-      const data = await response.json();
-
-      if (data.status === 'ok') {
-        const processedItems: RSSItem[] = data.items.map((item: any) => ({
-          title: item.title || 'بدون عنوان',
-          link: item.link || '#',
-          pubDate: item.pubDate || new Date().toISOString(),
-          author: item.author || item.creator || 'غير محدد',
-          description: item.description || item.content || '',
-          content: item.content || item.description || '',
-          categories: item.categories || [],
-          thumbnail: extractImageFromContent(item.content || item.description || '') || 
-                    item.thumbnail || 
-                    item.enclosure?.link || 
-                    'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop',
-          enclosure: item.enclosure
-        }));
-
-        setFeeds(prev => ({
-          ...prev,
-          [config.id]: {
-            title: data.feed.title || config.name,
-            description: data.feed.description || '',
-            link: data.feed.link || '',
-            items: processedItems
-          }
-        }));
-      } else {
-        throw new Error(data.message || 'فشل في تحميل الخلاصة');
+      // Try RSS2JSON first
+      let feedData;
+      try {
+        feedData = await fetchWithRSS2JSON(config);
+      } catch (error) {
+        console.log('RSS2JSON failed, trying AllOrigins...');
+        feedData = await fetchWithAllOrigins(config);
       }
+
+      setFeeds(prev => ({
+        ...prev,
+        [config.id]: feedData
+      }));
     } catch (err) {
+      console.error('All methods failed:', err);
       setError(prev => ({ 
         ...prev, 
-        [config.id]: err instanceof Error ? err.message : 'خطأ في تحميل الخلاصة'
+        [config.id]: 'فشل في تحميل الخلاصة. يرجى المحاولة لاحقاً.'
       }));
     } finally {
       setLoading(prev => ({ ...prev, [config.id]: false }));
     }
   };
 
-  const extractImageFromContent = (content: string): string | null => {
-    const imgRegex = /<img[^>]+src="([^">]+)"/i;
-    const match = content.match(imgRegex);
-    return match ? match[1] : null;
-  };
-
   const formatDate = (dateString: string): string => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('ar-EG', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('ar-EG', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return 'تاريخ غير محدد';
+    }
   };
 
   const stripHTML = (html: string): string => {
@@ -156,7 +234,7 @@ const App: React.FC = () => {
     
     feedConfigs.forEach(config => {
       const feed = feeds[config.id];
-      if (feed) {
+      if (feed && feed.items) {
         feed.items.forEach(item => {
           allItems.push({
             ...item,
@@ -180,7 +258,7 @@ const App: React.FC = () => {
     const feed = feeds[selectedFeed];
     const config = feedConfigs.find(c => c.id === selectedFeed);
     
-    if (!feed || !config) return [];
+    if (!feed || !config || !feed.items) return [];
     
     return feed.items.map(item => ({
       ...item,
@@ -261,12 +339,18 @@ const App: React.FC = () => {
                     </button>
                     
                     {loading[config.id] && (
-                      <div className="text-sm text-gray-500 px-4">جاري التحميل...</div>
+                      <div className="text-sm text-gray-500 px-4 flex items-center">
+                        <RefreshCw className="h-4 w-4 animate-spin ml-2" />
+                        جاري التحميل...
+                      </div>
                     )}
                     
                     {error[config.id] && (
                       <div className="text-sm text-red-500 px-4 flex items-center justify-between">
-                        <span>{error[config.id]}</span>
+                        <div className="flex items-center">
+                          <AlertCircle className="h-4 w-4 ml-2" />
+                          <span>{error[config.id]}</span>
+                        </div>
                         <button
                           onClick={() => refreshFeed(config)}
                           className="text-red-600 hover:text-red-800"
@@ -333,19 +417,6 @@ const App: React.FC = () => {
                         {truncateText(item.description, 200)}
                       </p>
                       
-                      {item.categories && item.categories.length > 0 && (
-                        <div className="flex flex-wrap gap-2 mb-4">
-                          {item.categories.slice(0, 3).map((category, idx) => (
-                            <span 
-                              key={idx} 
-                              className="inline-block bg-gray-100 text-gray-700 px-2 py-1 rounded text-xs"
-                            >
-                              {category}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      
                       <a
                         href={item.link}
                         target="_blank"
@@ -361,9 +432,23 @@ const App: React.FC = () => {
               ))}
             </div>
 
-            {filteredItems.length === 0 && (
+            {filteredItems.length === 0 && !Object.values(loading).some(Boolean) && (
               <div className="text-center py-12">
+                <AlertCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                 <p className="text-gray-500 text-lg">لا توجد أخبار متاحة حالياً</p>
+                <button
+                  onClick={refreshAllFeeds}
+                  className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  إعادة المحاولة
+                </button>
+              </div>
+            )}
+
+            {Object.values(loading).some(Boolean) && filteredItems.length === 0 && (
+              <div className="text-center py-12">
+                <RefreshCw className="h-12 w-12 text-blue-600 mx-auto mb-4 animate-spin" />
+                <p className="text-gray-500 text-lg">جاري تحميل الأخبار...</p>
               </div>
             )}
           </div>
