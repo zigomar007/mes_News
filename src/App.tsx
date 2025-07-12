@@ -174,7 +174,7 @@ const App: React.FC = () => {
       // Use different proxy for localhost
       const proxyUrl = isLocalhost 
         ? `https://api.allorigins.win/get?url=${encodeURIComponent(config.url)}`
-        : `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(config.url)}&count=25`;
+        : `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(config.url)}`;
       
       const response = await fetch(proxyUrl);
       const data = await response.json();
