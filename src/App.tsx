@@ -71,13 +71,16 @@ const feedConfigs: FeedConfig[] = [
   }
 ];
 
-// Alternative RSS proxy services
-const RSS_PROXIES = [
-  'https://api.rss2json.com/v1/api.json',
-  'https://api.allorigins.win/get?url=',
-  'https://cors-anywhere.herokuapp.com/',
-  'https://corsproxy.io/?',
-  'https://api.codetabs.com/v1/proxy?quest='
+// Images de fallback par catégorie
+const fallbackImages = [
+  'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop',
+  'https://images.unsplash.com/photo-1495020689067-958852a7765e?w=400&h=300&fit=crop',
+  'https://images.unsplash.com/photo-1586339949916-3e9457bef6d3?w=400&h=300&fit=crop',
+  'https://images.unsplash.com/photo-1444653614773-995cb1ef9efa?w=400&h=300&fit=crop',
+  'https://images.unsplash.com/photo-1563986768609-322da13575f3?w=400&h=300&fit=crop',
+  'https://images.unsplash.com/photo-1585829365295-ab7cd400c167?w=400&h=300&fit=crop',
+  'https://images.unsplash.com/photo-1611273426858-450d8e3c9fce?w=400&h=300&fit=crop',
+  'https://images.unsplash.com/photo-1557804506-669a67965ba0?w=400&h=300&fit=crop'
 ];
 
 // Check if running locally
@@ -93,23 +96,26 @@ const App: React.FC = () => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [localWarning, setLocalWarning] = useState(isLocalhost);
 
-  const extractImageFromContent = (content: string): string | null => {
-    if (!content) return null;
+  // Fonction améliorée pour extraire les images avec plus de patterns
+  const extractImageFromContent = (content: string, itemIndex: number = 0): string | null => {
+    if (!content) return fallbackImages[itemIndex % fallbackImages.length];
     
-    // 1. PRIORITÉ: Chercher les balises media:content et media:thumbnail (pour Le Monde, etc.)
+    // Nettoyer le contenu HTML
+    const cleanContent = content.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    
+    // 1. PRIORITÉ MAXIMALE: Chercher les balises media:content et media:thumbnail
     const mediaPatterns = [
-      /<media:content[^>]+url=["']([^"']+)["'][^>]*>/gi,
-      /<media:thumbnail[^>]+url=["']([^"']+)["'][^>]*>/gi,
-      /<media:content[^>]+url=([^\s>]+)[^>]*>/gi,
-      /<media:thumbnail[^>]+url=([^\s>]+)[^>]*>/gi
+      /<media:content[^>]+url=["']([^"']+\.(?:jpg|jpeg|png|gif|webp)[^"']*)["'][^>]*>/gi,
+      /<media:thumbnail[^>]+url=["']([^"']+\.(?:jpg|jpeg|png|gif|webp)[^"']*)["'][^>]*>/gi,
+      /<media:content[^>]+url=([^\s>]+\.(?:jpg|jpeg|png|gif|webp))[^>]*>/gi,
+      /<media:thumbnail[^>]+url=([^\s>]+\.(?:jpg|jpeg|png|gif|webp))[^>]*>/gi
     ];
     
     for (const pattern of mediaPatterns) {
-      const matches = content.matchAll(pattern);
+      const matches = Array.from(cleanContent.matchAll(pattern));
       for (const match of matches) {
         const imageUrl = match[1];
-        if (imageUrl && imageUrl.length > 10) {
-          // Nettoyer l'URL
+        if (imageUrl && imageUrl.length > 15 && !imageUrl.includes('logo') && !imageUrl.includes('icon')) {
           const cleanUrl = imageUrl.replace(/&amp;/g, '&').replace(/['"]/g, '').trim();
           if (cleanUrl.startsWith('http') || cleanUrl.startsWith('//')) {
             return cleanUrl.startsWith('//') ? 'https:' + cleanUrl : cleanUrl;
@@ -120,32 +126,35 @@ const App: React.FC = () => {
     
     // 2. Chercher les enclosures avec type image
     const enclosurePatterns = [
-      /<enclosure[^>]+url=["']([^"']+)["'][^>]*type=["']image[^"']*["'][^>]*>/gi,
-      /<enclosure[^>]+type=["']image[^"']*["'][^>]*url=["']([^"']+)["'][^>]*>/gi
+      /<enclosure[^>]+url=["']([^"']+\.(?:jpg|jpeg|png|gif|webp)[^"']*)["'][^>]*type=["']image[^"']*["'][^>]*>/gi,
+      /<enclosure[^>]+type=["']image[^"']*["'][^>]*url=["']([^"']+\.(?:jpg|jpeg|png|gif|webp)[^"']*)["'][^>]*>/gi
     ];
     
     for (const pattern of enclosurePatterns) {
-      const match = content.match(pattern);
+      const match = cleanContent.match(pattern);
       if (match && match[1]) {
         const cleanUrl = match[1].replace(/&amp;/g, '&').trim();
         return cleanUrl.startsWith('//') ? 'https:' + cleanUrl : cleanUrl;
       }
     }
     
-    // 3. Chercher les balises img traditionnelles
+    // 3. Chercher les balises img avec des critères plus stricts
     const imgPatterns = [
-      /<img[^>]+src=["']([^"']+)["'][^>]*>/gi,
-      /<img[^>]+src=([^\s>]+)[^>]*>/gi,
-      /src=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi,
-      /src=([^\s"']+\.(?:jpg|jpeg|png|gif|webp))/gi
+      /<img[^>]+src=["']([^"']+\.(?:jpg|jpeg|png|gif|webp)[^"']*)["'][^>]*>/gi,
+      /<img[^>]+src=([^\s>]+\.(?:jpg|jpeg|png|gif|webp))[^>]*>/gi
     ];
     
     for (const pattern of imgPatterns) {
-      const matches = content.matchAll(pattern);
+      const matches = Array.from(cleanContent.matchAll(pattern));
       for (const match of matches) {
         const imageUrl = match[1];
-        if (imageUrl && !imageUrl.includes('logo') && !imageUrl.includes('icon') && imageUrl.length > 10) {
-          // Nettoyer l'URL
+        if (imageUrl && 
+            imageUrl.length > 20 && 
+            !imageUrl.includes('logo') && 
+            !imageUrl.includes('icon') && 
+            !imageUrl.includes('avatar') &&
+            !imageUrl.includes('button') &&
+            !imageUrl.includes('badge')) {
           const cleanUrl = imageUrl.replace(/&amp;/g, '&').trim();
           if (cleanUrl.startsWith('http') || cleanUrl.startsWith('//')) {
             return cleanUrl.startsWith('//') ? 'https:' + cleanUrl : cleanUrl;
@@ -154,24 +163,26 @@ const App: React.FC = () => {
       }
     }
     
-    // 4. Chercher toute URL qui ressemble à une image
+    // 4. Chercher des URLs d'images dans le texte brut
     const urlPattern = /https?:\/\/[^\s<>"']+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^\s<>"']*)?/gi;
-    const urlMatches = content.match(urlPattern);
+    const urlMatches = cleanContent.match(urlPattern);
     if (urlMatches && urlMatches.length > 0) {
-      // Filtrer les logos et petites images
       for (const url of urlMatches) {
-        if (!url.includes('logo') && !url.includes('icon') && !url.includes('avatar')) {
+        if (!url.includes('logo') && 
+            !url.includes('icon') && 
+            !url.includes('avatar') &&
+            url.length > 20) {
           return url;
         }
       }
     }
     
-    return null;
+    // 5. Fallback avec image aléatoire basée sur l'index
+    return fallbackImages[itemIndex % fallbackImages.length];
   };
 
   const fetchWithRSS2JSON = async (config: FeedConfig) => {
     try {
-      // Use different proxy for localhost
       const proxyUrl = isLocalhost 
         ? `https://api.allorigins.win/get?url=${encodeURIComponent(config.url)}`
         : `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(config.url)}`;
@@ -180,14 +191,13 @@ const App: React.FC = () => {
       const data = await response.json();
       
       if (isLocalhost && data.contents) {
-        // Parse XML manually for localhost
         return await parseXMLContent(data.contents, config);
       } else if (data.status === 'ok') {
         return {
           title: data.feed.title || config.name,
           description: data.feed.description || '',
           link: data.feed.link || '',
-          items: data.items.map((item: any) => ({
+          items: data.items.map((item: any, index: number) => ({
             title: item.title || 'بدون عنوان',
             link: item.link || '#',
             pubDate: item.pubDate || new Date().toISOString(),
@@ -197,9 +207,8 @@ const App: React.FC = () => {
             categories: item.categories || [],
             thumbnail: item.thumbnail || 
                       item.enclosure?.url ||
-                      extractImageFromContent(item.content || item.description || '') ||
-                      extractImageFromContent(item.title || '') ||
-                      null
+                      extractImageFromContent(item.content || item.description || '', index) ||
+                      fallbackImages[index % fallbackImages.length]
           }))
         };
       }
@@ -216,7 +225,7 @@ const App: React.FC = () => {
       const xmlDoc = parser.parseFromString(xmlContent, 'text/xml');
       const items = xmlDoc.querySelectorAll('item');
       
-      const feedItems: RSSItem[] = Array.from(items).slice(0, 25).map(item => {
+      const feedItems: RSSItem[] = Array.from(items).slice(0, 25).map((item, index) => {
         const title = item.querySelector('title')?.textContent || 'بدون عنوان';
         const link = item.querySelector('link')?.textContent || '#';
         const pubDate = item.querySelector('pubDate')?.textContent || new Date().toISOString();
@@ -226,7 +235,7 @@ const App: React.FC = () => {
         const description = item.querySelector('description')?.textContent || '';
         const content = item.querySelector('content\\:encoded')?.textContent || description;
         
-        // Extraction améliorée des images pour les flux comme Le Monde
+        // Extraction d'image améliorée avec index unique
         let thumbnail = null;
         
         // 1. Chercher media:content et media:thumbnail
@@ -236,14 +245,21 @@ const App: React.FC = () => {
         }
         
         // 2. Chercher enclosure avec type image
-        const enclosure = item.querySelector('enclosure[type^="image"]');
-        if (!thumbnail && enclosure) {
-          thumbnail = enclosure.getAttribute('url');
+        if (!thumbnail) {
+          const enclosure = item.querySelector('enclosure[type^="image"]');
+          if (enclosure) {
+            thumbnail = enclosure.getAttribute('url');
+          }
         }
         
-        // 3. Extraction depuis le contenu HTML
+        // 3. Extraction depuis le contenu HTML avec index
         if (!thumbnail) {
-          thumbnail = extractImageFromContent(content) || extractImageFromContent(description);
+          thumbnail = extractImageFromContent(content || description, index);
+        }
+        
+        // 4. Fallback final avec index unique
+        if (!thumbnail) {
+          thumbnail = fallbackImages[index % fallbackImages.length];
         }
         
         return {
@@ -276,12 +292,11 @@ const App: React.FC = () => {
       const data = await response.json();
       
       if (data.contents) {
-        // Parse XML manually
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(data.contents, 'text/xml');
         const items = xmlDoc.querySelectorAll('item');
         
-        const feedItems: RSSItem[] = Array.from(items).slice(0, 25).map(item => {
+        const feedItems: RSSItem[] = Array.from(items).slice(0, 25).map((item, index) => {
           const title = item.querySelector('title')?.textContent || 'بدون عنوان';
           const link = item.querySelector('link')?.textContent || '#';
           const pubDate = item.querySelector('pubDate')?.textContent || new Date().toISOString();
@@ -291,7 +306,7 @@ const App: React.FC = () => {
           const description = item.querySelector('description')?.textContent || '';
           const content = item.querySelector('content\\:encoded')?.textContent || description;
           
-          // Extraction améliorée des images
+          // Extraction d'image avec index unique pour chaque article
           let thumbnail = null;
           
           // 1. Chercher media:content et media:thumbnail
@@ -301,14 +316,21 @@ const App: React.FC = () => {
           }
           
           // 2. Chercher enclosure avec type image
-          const enclosure = item.querySelector('enclosure[type^="image"]');
-          if (!thumbnail && enclosure) {
-            thumbnail = enclosure.getAttribute('url');
+          if (!thumbnail) {
+            const enclosure = item.querySelector('enclosure[type^="image"]');
+            if (enclosure) {
+              thumbnail = enclosure.getAttribute('url');
+            }
           }
           
-          // 3. Extraction depuis le contenu HTML
+          // 3. Extraction depuis le contenu HTML avec index
           if (!thumbnail) {
-            thumbnail = extractImageFromContent(content) || extractImageFromContent(description);
+            thumbnail = extractImageFromContent(content || description, index);
+          }
+          
+          // 4. Fallback final avec index unique
+          if (!thumbnail) {
+            thumbnail = fallbackImages[index % fallbackImages.length];
           }
           
           return {
@@ -341,13 +363,11 @@ const App: React.FC = () => {
     setLoading(prev => ({ ...prev, [config.id]: true }));
     setError(prev => ({ ...prev, [config.id]: '' }));
     
-    // Hide local warning once feeds start loading
     if (localWarning) {
       setLocalWarning(false);
     }
 
     try {
-      // Try different approaches based on environment
       let feedData;
       try {
         feedData = await fetchWithRSS2JSON(config);
@@ -580,17 +600,18 @@ const App: React.FC = () => {
 
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-1">
               {filteredItems.map((item, index) => (
-                <article key={`${item.feedId}-${index}`} className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow">
+                <article key={`${item.feedId}-${index}-${item.link}`} className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow">
                   <div className="lg:flex">
                     <div className="lg:w-1/3">
                       <img
-                        src={item.thumbnail || 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop'}
+                        src={item.thumbnail || fallbackImages[index % fallbackImages.length]}
                         alt={item.title}
                         className="w-full h-48 lg:h-full object-cover"
                         onError={(e) => {
                           const target = e.target as HTMLImageElement;
+                          const fallbackIndex = (index + Math.floor(Math.random() * fallbackImages.length)) % fallbackImages.length;
                           if (!target.src.includes('unsplash')) {
-                            target.src = 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop';
+                            target.src = fallbackImages[fallbackIndex];
                           }
                         }}
                       />
