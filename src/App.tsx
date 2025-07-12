@@ -72,7 +72,7 @@ const feedConfigs: FeedConfig[] = [
   }
 ];
 
-// Images de fallback par défaut
+// Image de fallback par défaut
 const defaultFallbackImage = 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop';
 
 declare global {
@@ -89,107 +89,178 @@ const App: React.FC = () => {
   const [selectedFeed, setSelectedFeed] = useState<string>('all');
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // Fonction pour extraire l'image réelle de l'article depuis le contenu RSS
+  // Fonction améliorée pour extraire l'image réelle de l'article
   const extractRealImageFromContent = (item: any): string => {
-    let imageUrl = defaultFallbackImage;
+    console.log('Extracting image for:', item.title?.substring(0, 50));
+    console.log('Item data:', {
+      thumbnail: item.thumbnail,
+      enclosure: item.enclosure,
+      content: item.content?.substring(0, 200),
+      description: item.description?.substring(0, 200)
+    });
 
     try {
-      // 1. Vérifier d'abord les champs directs de l'API RSS2JSON
-      if (item.thumbnail && item.thumbnail.trim() !== '') {
+      // 1. Vérifier thumbnail direct de RSS2JSON
+      if (item.thumbnail && item.thumbnail.trim() !== '' && item.thumbnail !== 'null') {
+        console.log('Found thumbnail:', item.thumbnail);
         return item.thumbnail;
       }
 
-      if (item.enclosure && item.enclosure.link && item.enclosure.type && item.enclosure.type.startsWith('image/')) {
-        return item.enclosure.link;
+      // 2. Vérifier enclosure (pièces jointes)
+      if (item.enclosure) {
+        if (typeof item.enclosure === 'string' && item.enclosure.includes('http')) {
+          console.log('Found enclosure string:', item.enclosure);
+          return item.enclosure;
+        }
+        if (item.enclosure.link && item.enclosure.type && item.enclosure.type.startsWith('image/')) {
+          console.log('Found enclosure object:', item.enclosure.link);
+          return item.enclosure.link;
+        }
       }
 
-      // 2. Analyser le contenu HTML pour extraire les images
-      const content = item.content || item.description || '';
-      if (content) {
-        // Créer un élément temporaire pour parser le HTML
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = content;
-
-        // Chercher toutes les images dans le contenu
-        const images = tempDiv.querySelectorAll('img');
+      // 3. Analyser le contenu HTML complet
+      const contentToAnalyze = item.content || item.description || '';
+      if (contentToAnalyze) {
+        console.log('Analyzing content for images...');
+        
+        // Créer un parser DOM temporaire
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(contentToAnalyze, 'text/html');
+        
+        // Chercher toutes les images
+        const images = doc.querySelectorAll('img');
+        console.log('Found', images.length, 'img tags');
         
         for (let img of images) {
-          const src = img.getAttribute('src');
+          const src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
           if (src && src.trim() !== '') {
-            // Filtrer les images qui ne sont pas des logos/icônes
             const srcLower = src.toLowerCase();
+            
+            // Filtrer les images non pertinentes
             if (!srcLower.includes('logo') && 
                 !srcLower.includes('icon') && 
                 !srcLower.includes('avatar') &&
                 !srcLower.includes('button') &&
                 !srcLower.includes('badge') &&
+                !srcLower.includes('pixel') &&
+                !srcLower.includes('tracking') &&
+                !srcLower.includes('1x1') &&
                 src.length > 20) {
               
-              // Convertir les URLs relatives en absolues si nécessaire
+              let finalUrl = src;
+              
+              // Convertir les URLs relatives
               if (src.startsWith('//')) {
-                return 'https:' + src;
-              } else if (src.startsWith('http')) {
-                return src;
+                finalUrl = 'https:' + src;
+              } else if (src.startsWith('/')) {
+                // URL relative, essayer de construire l'URL complète
+                try {
+                  const itemUrl = new URL(item.link);
+                  finalUrl = itemUrl.origin + src;
+                } catch (e) {
+                  continue;
+                }
+              } else if (!src.startsWith('http')) {
+                continue;
               }
+              
+              console.log('Found valid image:', finalUrl);
+              return finalUrl;
             }
           }
         }
 
-        // 3. Chercher des patterns d'images dans le texte brut
+        // 4. Chercher des patterns d'images dans le texte brut
         const imagePatterns = [
           /https?:\/\/[^\s<>"']+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^\s<>"']*)?/gi,
-          /<img[^>]+src=["']([^"']+)["'][^>]*>/gi,
-          /src=["']([^"']+\.(?:jpg|jpeg|png|gif|webp)[^"']*)["']/gi
+          /src=["']([^"']+\.(?:jpg|jpeg|png|gif|webp)[^"']*)["']/gi,
+          /"(https?:\/\/[^"]+\.(?:jpg|jpeg|png|gif|webp)[^"]*)"/gi
         ];
 
         for (let pattern of imagePatterns) {
-          const matches = content.match(pattern);
+          const matches = contentToAnalyze.match(pattern);
           if (matches && matches.length > 0) {
+            console.log('Found pattern matches:', matches.length);
+            
             for (let match of matches) {
               let url = match;
+              
+              // Extraire l'URL si c'est dans un attribut src
               if (pattern.toString().includes('src=')) {
                 const srcMatch = match.match(/src=["']([^"']+)["']/);
                 if (srcMatch) url = srcMatch[1];
+              } else if (pattern.toString().includes('"')) {
+                url = match.replace(/"/g, '');
               }
               
-              if (url && url.length > 20 && 
-                  !url.toLowerCase().includes('logo') && 
-                  !url.toLowerCase().includes('icon')) {
-                
-                if (url.startsWith('//')) {
-                  return 'https:' + url;
-                } else if (url.startsWith('http')) {
-                  return url;
+              if (url && url.length > 20) {
+                const urlLower = url.toLowerCase();
+                if (!urlLower.includes('logo') && 
+                    !urlLower.includes('icon') &&
+                    !urlLower.includes('avatar') &&
+                    !urlLower.includes('tracking')) {
+                  
+                  if (url.startsWith('//')) {
+                    url = 'https:' + url;
+                  }
+                  
+                  if (url.startsWith('http')) {
+                    console.log('Found pattern image:', url);
+                    return url;
+                  }
                 }
               }
             }
           }
         }
-      }
 
-      // 4. Vérifier les métadonnées de l'article
-      if (item.guid && typeof item.guid === 'string' && item.guid.includes('http') && 
-          (item.guid.includes('.jpg') || item.guid.includes('.png') || item.guid.includes('.jpeg'))) {
-        return item.guid;
+        // 5. Chercher dans les métadonnées spécifiques aux flux
+        if (item.guid && typeof item.guid === 'string') {
+          const guidLower = item.guid.toLowerCase();
+          if (guidLower.includes('http') && 
+              (guidLower.includes('.jpg') || guidLower.includes('.png') || 
+               guidLower.includes('.jpeg') || guidLower.includes('.webp'))) {
+            console.log('Found image in GUID:', item.guid);
+            return item.guid;
+          }
+        }
+
+        // 6. Chercher dans les propriétés étendues de l'item
+        for (let key in item) {
+          if (typeof item[key] === 'string' && item[key].includes('http')) {
+            const value = item[key].toLowerCase();
+            if ((value.includes('.jpg') || value.includes('.png') || 
+                 value.includes('.jpeg') || value.includes('.webp')) &&
+                !value.includes('logo') && !value.includes('icon')) {
+              console.log('Found image in property', key, ':', item[key]);
+              return item[key];
+            }
+          }
+        }
       }
 
     } catch (error) {
       console.warn('Erreur lors de l\'extraction d\'image:', error);
     }
 
-    return imageUrl;
+    console.log('No image found, using fallback');
+    return defaultFallbackImage;
   };
 
-  // Fonction pour charger un flux RSS avec Google Feed API et RSS2JSON
+  // Fonction pour charger un flux RSS avec RSS2JSON GFAPI
   const fetchRSSFeed = async (config: FeedConfig) => {
     setLoading(prev => ({ ...prev, [config.id]: true }));
     setError(prev => ({ ...prev, [config.id]: '' }));
 
     try {
-      // Méthode 1: Utiliser RSS2JSON avec gfapi.js (sans clé API)
+      console.log('Fetching feed:', config.name, config.url);
+
+      // Utiliser RSS2JSON avec gfapi.js
       if (window.rss2json_gfapi) {
         const response = await new Promise<any>((resolve, reject) => {
           window.rss2json_gfapi.load(config.url, (data: any) => {
+            console.log('RSS2JSON response for', config.name, ':', data);
+            
             if (data && data.status === 'ok') {
               resolve(data);
             } else {
@@ -202,59 +273,29 @@ const App: React.FC = () => {
           title: response.feed.title || config.name,
           description: response.feed.description || '',
           link: response.feed.link || '',
-          items: response.items.map((item: any) => ({
-            title: item.title || 'بدون عنوان',
-            link: item.link || '#',
-            pubDate: item.pubDate || new Date().toISOString(),
-            author: item.author || item.creator || 'غير محدد',
-            description: item.description || '',
-            content: item.content || item.description || '',
-            categories: item.categories || [],
-            thumbnail: extractRealImageFromContent(item),
-            guid: item.guid
-          }))
+          items: response.items.slice(0, 20).map((item: any, index: number) => {
+            console.log(`Processing item ${index + 1}:`, item.title?.substring(0, 50));
+            
+            return {
+              title: item.title || 'بدون عنوان',
+              link: item.link || '#',
+              pubDate: item.pubDate || new Date().toISOString(),
+              author: item.author || item.creator || 'غير محدد',
+              description: item.description || '',
+              content: item.content || item.description || '',
+              categories: item.categories || [],
+              thumbnail: extractRealImageFromContent(item),
+              guid: item.guid
+            };
+          })
         };
 
+        console.log('Processed feed data:', feedData);
         setFeeds(prev => ({ ...prev, [config.id]: feedData }));
         return;
       }
 
-      // Méthode 2: Fallback avec Google Feed API (si disponible)
-      if (window.google && window.google.feeds) {
-        const feed = new window.google.feeds.Feed(config.url);
-        feed.setNumEntries(20);
-        
-        const result = await new Promise<any>((resolve, reject) => {
-          feed.load((result: any) => {
-            if (result.error) {
-              reject(new Error(result.error.message));
-            } else {
-              resolve(result);
-            }
-          });
-        });
-
-        const feedData: RSSFeed = {
-          title: result.feed.title || config.name,
-          description: result.feed.description || '',
-          link: result.feed.link || '',
-          items: result.feed.entries.map((entry: any) => ({
-            title: entry.title || 'بدون عنوان',
-            link: entry.link || '#',
-            pubDate: entry.publishedDate || new Date().toISOString(),
-            author: entry.author || 'غير محدد',
-            description: entry.content || entry.contentSnippet || '',
-            content: entry.content || '',
-            categories: entry.categories || [],
-            thumbnail: extractRealImageFromContent(entry)
-          }))
-        };
-
-        setFeeds(prev => ({ ...prev, [config.id]: feedData }));
-        return;
-      }
-
-      // Méthode 3: Fetch direct (peut échouer à cause de CORS)
+      // Fallback avec fetch direct
       const response = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(config.url)}`);
       const data = await response.json();
 
@@ -263,7 +304,7 @@ const App: React.FC = () => {
           title: data.feed.title || config.name,
           description: data.feed.description || '',
           link: data.feed.link || '',
-          items: data.items.map((item: any) => ({
+          items: data.items.slice(0, 20).map((item: any) => ({
             title: item.title || 'بدون عنوان',
             link: item.link || '#',
             pubDate: item.pubDate || new Date().toISOString(),
@@ -332,17 +373,35 @@ const App: React.FC = () => {
   useEffect(() => {
     // Attendre que les APIs externes soient chargées
     const initFeeds = () => {
+      console.log('Initializing feeds...');
+      console.log('RSS2JSON GFAPI available:', !!window.rss2json_gfapi);
+      console.log('Google JSAPI available:', !!window.google);
+      
       feedConfigs.forEach(config => {
         fetchRSSFeed(config);
       });
     };
 
     // Vérifier si les APIs sont déjà chargées
-    if (window.rss2json_gfapi || (window.google && window.google.feeds)) {
+    if (window.rss2json_gfapi) {
       initFeeds();
     } else {
-      // Attendre un peu que les scripts se chargent
-      setTimeout(initFeeds, 1000);
+      // Attendre que les scripts se chargent
+      const checkAPIs = setInterval(() => {
+        if (window.rss2json_gfapi) {
+          clearInterval(checkAPIs);
+          initFeeds();
+        }
+      }, 500);
+
+      // Timeout après 10 secondes
+      setTimeout(() => {
+        clearInterval(checkAPIs);
+        if (!window.rss2json_gfapi) {
+          console.warn('APIs not loaded, trying anyway...');
+          initFeeds();
+        }
+      }, 10000);
     }
   }, []);
 
@@ -505,8 +564,13 @@ const App: React.FC = () => {
                         onError={(e) => {
                           const target = e.target as HTMLImageElement;
                           if (target.src !== defaultFallbackImage) {
+                            console.log('Image failed to load:', target.src);
                             target.src = defaultFallbackImage;
                           }
+                        }}
+                        onLoad={(e) => {
+                          const target = e.target as HTMLImageElement;
+                          console.log('Image loaded successfully:', target.src);
                         }}
                       />
                     </div>
