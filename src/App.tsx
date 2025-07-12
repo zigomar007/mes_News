@@ -44,6 +44,30 @@ const feedConfigs: FeedConfig[] = [
     color: 'green',
     bgColor: 'bg-green-50',
     textColor: 'text-green-800'
+  },
+  {
+    id: 'lemonde',
+    name: 'Le Monde',
+    url: 'https://www.lemonde.fr/rss/une.xml',
+    color: 'blue',
+    bgColor: 'bg-blue-50',
+    textColor: 'text-blue-800'
+  },
+  {
+    id: 'liberation',
+    name: 'Libération',
+    url: 'https://www.liberation.fr/arc/outboundfeeds/rss-all/',
+    color: 'red',
+    bgColor: 'bg-red-50',
+    textColor: 'text-red-800'
+  },
+  {
+    id: 'figaro',
+    name: 'Le Figaro',
+    url: 'https://www.lefigaro.fr/rss/figaro_actualites.xml',
+    color: 'purple',
+    bgColor: 'bg-purple-50',
+    textColor: 'text-purple-800'
   }
 ];
 
@@ -72,9 +96,43 @@ const App: React.FC = () => {
   const extractImageFromContent = (content: string): string | null => {
     if (!content) return null;
     
-    // Multiple strategies to extract images from content
+    // 1. PRIORITÉ: Chercher les balises media:content et media:thumbnail (pour Le Monde, etc.)
+    const mediaPatterns = [
+      /<media:content[^>]+url=["']([^"']+)["'][^>]*>/gi,
+      /<media:thumbnail[^>]+url=["']([^"']+)["'][^>]*>/gi,
+      /<media:content[^>]+url=([^\s>]+)[^>]*>/gi,
+      /<media:thumbnail[^>]+url=([^\s>]+)[^>]*>/gi
+    ];
     
-    // 1. Try to extract from img tags with various formats
+    for (const pattern of mediaPatterns) {
+      const matches = content.matchAll(pattern);
+      for (const match of matches) {
+        const imageUrl = match[1];
+        if (imageUrl && imageUrl.length > 10) {
+          // Nettoyer l'URL
+          const cleanUrl = imageUrl.replace(/&amp;/g, '&').replace(/['"]/g, '').trim();
+          if (cleanUrl.startsWith('http') || cleanUrl.startsWith('//')) {
+            return cleanUrl.startsWith('//') ? 'https:' + cleanUrl : cleanUrl;
+          }
+        }
+      }
+    }
+    
+    // 2. Chercher les enclosures avec type image
+    const enclosurePatterns = [
+      /<enclosure[^>]+url=["']([^"']+)["'][^>]*type=["']image[^"']*["'][^>]*>/gi,
+      /<enclosure[^>]+type=["']image[^"']*["'][^>]*url=["']([^"']+)["'][^>]*>/gi
+    ];
+    
+    for (const pattern of enclosurePatterns) {
+      const match = content.match(pattern);
+      if (match && match[1]) {
+        const cleanUrl = match[1].replace(/&amp;/g, '&').trim();
+        return cleanUrl.startsWith('//') ? 'https:' + cleanUrl : cleanUrl;
+      }
+    }
+    
+    // 3. Chercher les balises img traditionnelles
     const imgPatterns = [
       /<img[^>]+src=["']([^"']+)["'][^>]*>/gi,
       /<img[^>]+src=([^\s>]+)[^>]*>/gi,
@@ -87,7 +145,7 @@ const App: React.FC = () => {
       for (const match of matches) {
         const imageUrl = match[1];
         if (imageUrl && !imageUrl.includes('logo') && !imageUrl.includes('icon') && imageUrl.length > 10) {
-          // Clean up the URL
+          // Nettoyer l'URL
           const cleanUrl = imageUrl.replace(/&amp;/g, '&').trim();
           if (cleanUrl.startsWith('http') || cleanUrl.startsWith('//')) {
             return cleanUrl.startsWith('//') ? 'https:' + cleanUrl : cleanUrl;
@@ -96,23 +154,11 @@ const App: React.FC = () => {
       }
     }
     
-    // 2. Try to extract from media:content or media:thumbnail
-    const mediaPatterns = [
-      /<media:content[^>]+url=["']([^"']+)["'][^>]*>/gi,
-      /<media:thumbnail[^>]+url=["']([^"']+)["'][^>]*>/gi,
-      /<enclosure[^>]+url=["']([^"']+)["'][^>]*type=["']image[^"']*["'][^>]*>/gi
-    ];
-    
-    for (const pattern of mediaPatterns) {
-      const match = content.match(pattern);
-      if (match) return match[1];
-    }
-    
-    // 3. Look for any URL that looks like an image
+    // 4. Chercher toute URL qui ressemble à une image
     const urlPattern = /https?:\/\/[^\s<>"']+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^\s<>"']*)?/gi;
     const urlMatches = content.match(urlPattern);
     if (urlMatches && urlMatches.length > 0) {
-      // Filter out logos and small images
+      // Filtrer les logos et petites images
       for (const url of urlMatches) {
         if (!url.includes('logo') && !url.includes('icon') && !url.includes('avatar')) {
           return url;
@@ -128,7 +174,7 @@ const App: React.FC = () => {
       // Use different proxy for localhost
       const proxyUrl = isLocalhost 
         ? `https://api.allorigins.win/get?url=${encodeURIComponent(config.url)}`
-        : `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(config.url)}&count=20`;
+        : `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(config.url)}&count=25`;
       
       const response = await fetch(proxyUrl);
       const data = await response.json();
@@ -170,7 +216,7 @@ const App: React.FC = () => {
       const xmlDoc = parser.parseFromString(xmlContent, 'text/xml');
       const items = xmlDoc.querySelectorAll('item');
       
-      const feedItems: RSSItem[] = Array.from(items).slice(0, 20).map(item => {
+      const feedItems: RSSItem[] = Array.from(items).slice(0, 25).map(item => {
         const title = item.querySelector('title')?.textContent || 'بدون عنوان';
         const link = item.querySelector('link')?.textContent || '#';
         const pubDate = item.querySelector('pubDate')?.textContent || new Date().toISOString();
@@ -179,8 +225,26 @@ const App: React.FC = () => {
                       'غير محدد';
         const description = item.querySelector('description')?.textContent || '';
         const content = item.querySelector('content\\:encoded')?.textContent || description;
+        
+        // Extraction améliorée des images pour les flux comme Le Monde
+        let thumbnail = null;
+        
+        // 1. Chercher media:content et media:thumbnail
+        const mediaContent = item.querySelector('media\\:content, media\\:thumbnail');
+        if (mediaContent) {
+          thumbnail = mediaContent.getAttribute('url');
+        }
+        
+        // 2. Chercher enclosure avec type image
         const enclosure = item.querySelector('enclosure[type^="image"]');
-        const enclosureUrl = enclosure?.getAttribute('url') || null;
+        if (!thumbnail && enclosure) {
+          thumbnail = enclosure.getAttribute('url');
+        }
+        
+        // 3. Extraction depuis le contenu HTML
+        if (!thumbnail) {
+          thumbnail = extractImageFromContent(content) || extractImageFromContent(description);
+        }
         
         return {
           title,
@@ -190,10 +254,7 @@ const App: React.FC = () => {
           description,
           content,
           categories: [],
-          thumbnail: enclosureUrl ||
-                    extractImageFromContent(content) ||
-                    extractImageFromContent(description) ||
-                    null
+          thumbnail
         };
       });
 
@@ -220,7 +281,7 @@ const App: React.FC = () => {
         const xmlDoc = parser.parseFromString(data.contents, 'text/xml');
         const items = xmlDoc.querySelectorAll('item');
         
-        const feedItems: RSSItem[] = Array.from(items).slice(0, 20).map(item => {
+        const feedItems: RSSItem[] = Array.from(items).slice(0, 25).map(item => {
           const title = item.querySelector('title')?.textContent || 'بدون عنوان';
           const link = item.querySelector('link')?.textContent || '#';
           const pubDate = item.querySelector('pubDate')?.textContent || new Date().toISOString();
@@ -229,8 +290,26 @@ const App: React.FC = () => {
                         'غير محدد';
           const description = item.querySelector('description')?.textContent || '';
           const content = item.querySelector('content\\:encoded')?.textContent || description;
+          
+          // Extraction améliorée des images
+          let thumbnail = null;
+          
+          // 1. Chercher media:content et media:thumbnail
+          const mediaContent = item.querySelector('media\\:content, media\\:thumbnail');
+          if (mediaContent) {
+            thumbnail = mediaContent.getAttribute('url');
+          }
+          
+          // 2. Chercher enclosure avec type image
           const enclosure = item.querySelector('enclosure[type^="image"]');
-          const enclosureUrl = enclosure?.getAttribute('url') || null;
+          if (!thumbnail && enclosure) {
+            thumbnail = enclosure.getAttribute('url');
+          }
+          
+          // 3. Extraction depuis le contenu HTML
+          if (!thumbnail) {
+            thumbnail = extractImageFromContent(content) || extractImageFromContent(description);
+          }
           
           return {
             title,
@@ -240,10 +319,7 @@ const App: React.FC = () => {
             description,
             content,
             categories: [],
-            thumbnail: enclosureUrl ||
-                      extractImageFromContent(content) ||
-                      extractImageFromContent(description) ||
-                      null
+            thumbnail
           };
         });
 
@@ -498,7 +574,7 @@ const App: React.FC = () => {
                 {selectedFeed === 'all' ? 'جميع الأخبار' : feedConfigs.find(c => c.id === selectedFeed)?.name}
               </h2>
               <p className="text-gray-600">
-                {filteredItems.length} خبر متاح
+                {filteredItems.length} article{filteredItems.length > 1 ? 's' : ''} disponible{filteredItems.length > 1 ? 's' : ''}
               </p>
             </div>
 
